@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Performance Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/lucide-react@0.383.0/dist/umd/lucide-react.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+    const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ComposedChart, LabelList } = Recharts;
+    const { TrendingUp, TrendingDown, Minus, Phone, Clock, Target, BarChart3, GitCompare, ArrowRightLeft, ThumbsUp, ChevronDown, ChevronUp, ArrowLeft, Info, X, ArrowUpRight, ArrowDownRight, RefreshCw, DollarSign, MessageSquare, Star } = LucideReact;
+
+    /* ════════════════════════════════════════════
+       UTILITIES
+       ════════════════════════════════════════════ */
+    function sRng(seed) { let s = Math.abs(seed) || 1; return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; }; }
+    function hash(str) { let h = 0; for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; } return Math.abs(h) || 1; }
+    const MN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const DN = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    const MONTHS = [1,2,3,4,5,6,7,8,9,10,11,12];
+    function daysInMonth(m, y = 2026) { return new Date(y, m, 0).getDate(); }
+    function weeksInMonth(m) { return Math.ceil(daysInMonth(m) / 7); }
+    function cwd(y, m, d) { let c = 0; for (let i = 1; i <= d; i++) { if (new Date(y, m-1, i).getDay() % 6 !== 0) c++; } return c; }
+    function daysInWeek(m, w) { const dim = daysInMonth(m), s = w*7+1, e = Math.min(s+6, dim), days = []; for (let d = s; d <= e; d++) { const dw = new Date(2026, m-1, d).getDay(); if (dw !== 0 && dw !== 6) days.push({day: d, label: DN[dw] + " " + d}); } return days; }
+
+    function Badge({children, className=""}) { return (<span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${className}`}>{children}</span>); }
+    const scoreBadge = s => s >= 80 ? "bg-green-100 text-green-800" : s >= 70 ? "bg-yellow-100 text-yellow-800" : "bg-red-100 text-red-800";
+    const TrendIcon = ({t}) => t === "up" ? <TrendingUp className="w-4 h-4 text-green-600"/> : t === "down" ? <TrendingDown className="w-4 h-4 text-red-600"/> : <Minus className="w-4 h-4 text-gray-500"/>;
+    const fmtPct = v => { const s = v > 0 ? "+" : ""; return `${s}${v.toFixed(2)}%`; };
+    const SEGMENTS = [
+      {k:"introTime",l:"Intro",c:"#6366f1"},{k:"authenticationTime",l:"Authentication",c:"#8b5cf6"},
+      {k:"kycTime",l:"KYC",c:"#06b6d4"},{k:"redemptionDetailsTime",l:"Redemption Details",c:"#3b82f6"},
+      {k:"confirmationsDisclosuresTime",l:"Confirmations",c:"#f59e0b"},{k:"outroTime",l:"Outro",c:"#10b981"}
+    ];
+    const AX = {fontSize:14};
+    const LG = {fontSize:13};
+
+    function aggWeek(d, fields) { const b = new Map(); d.forEach(x => { const k = `${x.year}-${x.month}-${x.weekIndex}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const o = {weekLabel: `Week ${it[0].weekIndex+1}`, month: it[0].month, year: it[0].year}; fields.forEach(f => { o[f] = Math.round(it.reduce((s,x) => s + x[f], 0) * 100) / 100; }); return o; }); }
+    function aggMonth(d, fields) { const b = new Map(); d.forEach(x => { const k = `${x.year}-${x.month}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const o = {period: `${MN[it[0].month-1]} ${it[0].year}`, month: it[0].month, year: it[0].year}; fields.forEach(f => { o[f] = Math.round(it.reduce((s,x) => s + x[f], 0) * 100) / 100; }); return o; }); }
+
+    /* ════════════════════════════════════════════
+       ADVISOR DATA & METRICS
+       ════════════════════════════════════════════ */
+    const mkM = (os,cph,aht,acw,ia,sc,cte,cb,ccc,fuc,sp,snu,sne,oi,oa,pt,poc,it2,at,kt,rd,cd,ot) => ({overallScore:os,callsPerHour:cph,averageHandleTime:aht,afterCallWorkTime:acw,informationAccuracy:ia,securityCompliance:sc,callTimeEfficiency:cte,conversationalBalance:cb,clientConcernsCovered:ccc,followUpClarity:fuc,callSentimentPositive:sp,callSentimentNeutral:snu,callSentimentNegative:sne,opportunitiesIdentified:oi,opportunitiesActioned:oa,performanceTrend:pt,pctDayOnCalls:poc,introTime:it2,authenticationTime:at,kycTime:kt,redemptionDetailsTime:rd,confirmationsDisclosuresTime:cd,outroTime:ot});
+    const advisorBase = [
+      {id:"1",name:"Sarah Mitchell",team:"Redemptions",callType:"redemption",weeklyHours:35,base:mkM(90,5.5,11.2,4.8,97,99,91,78,88,93,65,25,10,42,29,"up",72,0.7,1.8,2.2,3.4,2.2,0.9)},
+      {id:"2",name:"James Rodriguez",team:"Redemptions",callType:"redemption",weeklyHours:24,base:mkM(78,3.2,16.8,8.2,84,88,68,91,65,82,52,31,17,15,8,"stable",58,1.1,2.7,3.5,5.2,3.5,0.8)},
+      {id:"3",name:"Emily Chen",team:"Client Appointments",callType:"appointment",weeklyHours:40,base:mkM(96,7.4,12.4,5.1,98,99,96,95,96,98,72,20,8,58,53,"up",82,0.8,1.9,2.5,3.8,2.6,0.8)},
+      {id:"4",name:"Michael Thompson",team:"Redemptions",callType:"redemption",weeklyHours:28,base:mkM(70,4.3,15.9,7.8,71,68,65,73,57,77,48,33,19,12,5,"down",64,1.1,2.5,3.2,4.9,3.4,0.8)},
+      {id:"5",name:"Amanda Foster",team:"Client Appointments",callType:"appointment",weeklyHours:32,base:mkM(89,6.8,13.1,5.9,95,97,94,88,82,96,68,23,9,56,38,"up",78,0.9,2.0,2.6,4.1,2.7,0.8)},
+      {id:"6",name:"David Park",team:"Redemptions",callType:"redemption",weeklyHours:38,base:mkM(84,4.9,13.6,6.4,86,91,82,85,73,87,58,28,14,28,21,"stable",68,0.9,2.1,2.7,4.3,2.8,0.8)},
+      {id:"7",name:"Jessica Martinez",team:"Client Appointments",callType:"appointment",weeklyHours:22,base:mkM(88,6.2,14.2,6.7,88,92,86,94,84,89,70,22,8,34,29,"up",74,1.0,2.2,2.8,4.5,2.9,0.8)},
+      {id:"8",name:"Robert Wilson",team:"Redemptions",callType:"redemption",weeklyHours:20,base:mkM(74,3.7,14.7,7.5,79,83,72,69,61,74,54,29,17,18,11,"down",60,1.0,2.3,2.9,4.7,3.0,0.8)},
+    ];
+    function genMetrics(advisor, month, period, week = 0, dayOfMonth = 1) {
+      const b = advisor.base, rm = sRng(hash(advisor.id + "-m" + month));
+      const vm = (val, range, mn, mx) => Math.max(mn ?? 0, Math.min(mx ?? 999, Math.round((val + (rm()-0.5)*range)*10)/10));
+      const vmp = (val, range) => Math.max(0, Math.min(100, Math.round(val + (rm()-0.5)*range)));
+      const vmi = (val, range) => Math.max(0, Math.round(val + (rm()-0.5)*range));
+      const mm = { overallScore:vmp(b.overallScore,6), callsPerHour:vm(b.callsPerHour,0.6,1), averageHandleTime:vm(b.averageHandleTime,1.5,5), afterCallWorkTime:vm(b.afterCallWorkTime,1,1), informationAccuracy:vmp(b.informationAccuracy,6), securityCompliance:vmp(b.securityCompliance,4), callTimeEfficiency:vmp(b.callTimeEfficiency,6), conversationalBalance:vmp(b.conversationalBalance,8), clientConcernsCovered:vmp(b.clientConcernsCovered,8), followUpClarity:vmp(b.followUpClarity,6), callSentimentPositive:vmp(b.callSentimentPositive,6), callSentimentNeutral:0, callSentimentNegative:vmp(b.callSentimentNegative,4), opportunitiesIdentified:vmi(b.opportunitiesIdentified,10), opportunitiesActioned:vmi(b.opportunitiesActioned,8), performanceTrend:b.performanceTrend, pctDayOnCalls:vmp(b.pctDayOnCalls,6), introTime:vm(b.introTime,0.2,0.3), authenticationTime:vm(b.authenticationTime,0.3,0.5), kycTime:vm(b.kycTime,0.3,0.5), redemptionDetailsTime:vm(b.redemptionDetailsTime,0.4,1), confirmationsDisclosuresTime:vm(b.confirmationsDisclosuresTime,0.3,0.5), outroTime:vm(b.outroTime,0.15,0.3) };
+      mm.callSentimentNeutral = Math.max(5, 100 - mm.callSentimentPositive - mm.callSentimentNegative);
+      if (mm.opportunitiesActioned > mm.opportunitiesIdentified) mm.opportunitiesActioned = mm.opportunitiesIdentified;
+      if (period === "month" || period === "all-time") return mm;
+      const rw = sRng(hash(advisor.id + "-w" + month + "-" + week));
+      const vw = (val, range) => Math.max(0, Math.min(100, Math.round((val + (rw()-0.5)*range)*10)/10));
+      const wm = {...mm, overallScore:Math.round(vw(mm.overallScore,4)), callsPerHour:vw(mm.callsPerHour,0.4), averageHandleTime:vw(mm.averageHandleTime,0.8), conversationalBalance:Math.round(vw(mm.conversationalBalance,5)), clientConcernsCovered:Math.round(vw(mm.clientConcernsCovered,5)), followUpClarity:Math.round(vw(mm.followUpClarity,4)), callSentimentPositive:Math.round(vw(mm.callSentimentPositive,4)), callSentimentNegative:Math.round(vw(mm.callSentimentNegative,3)), pctDayOnCalls:Math.round(vw(mm.pctDayOnCalls,4)), opportunitiesIdentified:Math.max(1, Math.round(mm.opportunitiesIdentified/4 + (rw()-0.5)*2)), opportunitiesActioned:Math.max(0, Math.round(mm.opportunitiesActioned/4 + (rw()-0.5)*2)) };
+      wm.callSentimentNeutral = Math.max(0, 100 - wm.callSentimentPositive - wm.callSentimentNegative);
+      if (wm.opportunitiesActioned > wm.opportunitiesIdentified) wm.opportunitiesActioned = wm.opportunitiesIdentified;
+      if (period === "week") return wm;
+      const rd2 = sRng(hash(advisor.id + "-d" + month + "-" + dayOfMonth));
+      const vd = (val, range) => Math.max(0, Math.min(100, Math.round((val + (rd2()-0.5)*range)*10)/10));
+      const dm = {...wm, overallScore:Math.round(vd(wm.overallScore,3)), callsPerHour:vd(wm.callsPerHour,0.3), averageHandleTime:vd(wm.averageHandleTime,0.5), conversationalBalance:Math.round(vd(wm.conversationalBalance,4)), clientConcernsCovered:Math.round(vd(wm.clientConcernsCovered,4)), followUpClarity:Math.round(vd(wm.followUpClarity,3)), callSentimentPositive:Math.round(vd(wm.callSentimentPositive,3)), callSentimentNegative:Math.round(vd(wm.callSentimentNegative,2)), pctDayOnCalls:Math.round(vd(wm.pctDayOnCalls,3)), opportunitiesIdentified:Math.max(0, Math.round(mm.opportunitiesIdentified/22 + (rd2()-0.5))), opportunitiesActioned:Math.max(0, Math.round(mm.opportunitiesActioned/22 + (rd2()-0.5))) };
+      dm.callSentimentNeutral = Math.max(0, 100 - dm.callSentimentPositive - dm.callSentimentNegative);
+      if (dm.opportunitiesActioned > dm.opportunitiesIdentified) dm.opportunitiesActioned = dm.opportunitiesIdentified;
+      return dm;
+    }
+    function getAdvisors(month, period, week, dayOfMonth) {
+      return advisorBase.map(a => ({ ...a, metrics: genMetrics(a, month, period, week, dayOfMonth), metricsByPeriod: { day: genMetrics(a, month, "day", week, dayOfMonth), week: genMetrics(a, month, "week", week), month: genMetrics(a, month, "month"), "all-time": genMetrics(a, month, "all-time") } })).sort((a,b) => b.metrics.overallScore - a.metrics.overallScore);
+    }
+
+    /* ════════════════════════════════════════════
+       METRIC DEFINITIONS
+       ════════════════════════════════════════════ */
+    const METRIC_DEFS = [
+      {title:"Overall",metrics:[{name:"Overall Score",unit:"0–100",def:"A composite performance score aggregating quality, experience, and operational metrics, weighted and normalized to a 0–100 scale. Higher is better."}]},
+      {title:"Operational",metrics:[{name:"Weekly Hours",unit:"Hours",def:"Total contracted working hours per week for the advisor."},{name:"Calls per Hour",unit:"Calls/hr",def:"Number of calls completed divided by hours worked."},{name:"Avg Handle Time",unit:"Minutes",def:"Average total duration of a call from answer to end."},{name:"% Day On Calls",unit:"%",def:"Percentage of work hours spent actively on calls."},{name:"% Day Off Calls",unit:"%",def:"Percentage of work hours on non-call activities."}]},
+      {title:"Call Time Breakdown",metrics:[{name:"Intro",unit:"Minutes (avg per call)",def:"Average time spent on the opening of the call."},{name:"Authentication",unit:"Minutes (avg per call)",def:"Average time spent verifying the client's identity."},{name:"KYC",unit:"Minutes (avg per call)",def:"Average time on Know Your Customer questions."},{name:"Redemption Details",unit:"Minutes (avg per call)",def:"Average time gathering redemption request information."},{name:"Confirmations & Disclosures",unit:"Minutes (avg per call)",def:"Average time confirming decisions and reading disclosures."},{name:"Outro",unit:"Minutes (avg per call)",def:"Average time closing the call."}]},
+      {title:"Quality",metrics:[{name:"Conversational Balance",unit:"High / Medium / Low",def:"Ratio of advisor to client speaking time."},{name:"Client Concerns Covered",unit:"%",def:"Percentage of client concerns meaningfully addressed."},{name:"Follow-up Clarity",unit:"High / Medium / Low",def:"How clearly next steps were communicated."}]},
+      {title:"Experience",metrics:[{name:"Positive Sentiment",unit:"% of calls",def:"Calls classified as positive in tone."},{name:"Neutral Sentiment",unit:"% of calls",def:"Calls classified as neutral."},{name:"Negative Sentiment",unit:"% of calls",def:"Calls classified as negative. Lower is better."}]},
+      {title:"Opportunities",metrics:[{name:"Opportunities Identified",unit:"Count",def:"Calls where a potential opportunity was identified."},{name:"Opportunities Actioned",unit:"Count",def:"Identified opportunities actively pursued."},{name:"Conversion Rate",unit:"%",def:"Actioned ÷ Identified × 100."}]}
+    ];
+    function MetricDefinitionsModal({onClose}) {
+      return (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4" onClick={onClose}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white rounded-t-xl z-10"><div><h2 className="text-lg font-semibold">Metric Definitions</h2></div><button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X className="w-5 h-5"/></button></div>
+            <div className="px-6 py-4 space-y-6 max-h-[70vh] overflow-y-auto">{METRIC_DEFS.map(sec => (<div key={sec.title}><h3 className="text-xs uppercase tracking-wide text-gray-400 mb-3 pb-2 border-b">{sec.title}</h3><div className="space-y-3">{sec.metrics.map(mt => (<div key={mt.name} className="flex gap-4"><div className="w-44 shrink-0"><p className="text-sm font-medium">{mt.name}</p><p className="text-xs text-gray-400">{mt.unit}</p></div><p className="text-sm text-gray-600 leading-relaxed">{mt.def}</p></div>))}</div></div>))}</div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ════════════════════════════════════════════
+       ADVISOR CARD
+       ════════════════════════════════════════════ */
+    function AdvisorCard({advisor, tp, metricCat, onClick}) {
+      const m = advisor.metricsByPeriod[tp];
+      const bc = {green:"bg-green-100 text-green-800",yellow:"bg-yellow-100 text-yellow-800",red:"bg-red-100 text-red-800",gray:"bg-gray-100 text-gray-700",blue:"bg-blue-100 text-blue-800"};
+      const rows = metricCat === "operational" ? [["Work Hours/Week", advisor.weeklyHours+"h", "blue"],["Calls per Hour", m.callsPerHour.toFixed(1), m.callsPerHour>=4.5?"green":m.callsPerHour>=3.5?"yellow":"red"],["Avg Handle Time", m.averageHandleTime+"m", m.averageHandleTime<=13.5?"green":m.averageHandleTime<=15?"yellow":"red"],["% Day On Calls", m.pctDayOnCalls+"%", m.pctDayOnCalls>=70?"green":m.pctDayOnCalls>=60?"yellow":"red"]] : metricCat === "quality" ? [["Conversational Balance", m.conversationalBalance>=80?"High":m.conversationalBalance>=60?"Medium":"Low", m.conversationalBalance>=80?"green":m.conversationalBalance>=60?"yellow":"red"],["Concerns Covered", m.clientConcernsCovered+"%", m.clientConcernsCovered>=80?"green":m.clientConcernsCovered>=70?"yellow":"red"],["Follow-up Clarity", m.followUpClarity>=80?"High":m.followUpClarity>=60?"Medium":"Low", m.followUpClarity>=80?"green":m.followUpClarity>=60?"yellow":"red"]] : metricCat === "experience" ? [["Positive Sentiment", m.callSentimentPositive+"%", m.callSentimentPositive>=55?"green":m.callSentimentPositive>=45?"yellow":"red"],["Neutral Sentiment", m.callSentimentNeutral+"%", "gray"],["Negative Sentiment", m.callSentimentNegative+"%", m.callSentimentNegative<=15?"green":m.callSentimentNegative<=20?"yellow":"red"]] : metricCat === "opportunities" ? [["Opportunities Identified", ""+m.opportunitiesIdentified, "blue"],["Opportunities Actioned", ""+m.opportunitiesActioned, "blue"],["Conversion Rate", m.opportunitiesIdentified>0 ? Math.round(m.opportunitiesActioned/m.opportunitiesIdentified*100)+"%" : "N/A", m.opportunitiesIdentified>0 && m.opportunitiesActioned/m.opportunitiesIdentified>=0.6?"green":"yellow"]] : SEGMENTS.map(s => [s.l, m[s.k]+"m", "blue"]);
+      return (
+        <div onClick={onClick} className={`bg-white rounded-xl border p-4 flex flex-col gap-3 transition-shadow ${onClick ? "hover:shadow-lg cursor-pointer" : ""}`}>
+          <div className="flex justify-between items-start"><div><h3 className="font-medium text-gray-900">{advisor.name}</h3><p className="text-xs text-gray-500">{advisor.callType==="redemption"?"Redemptions":"Appointments"}</p></div><div className="flex items-center gap-1.5"><TrendIcon t={m.performanceTrend}/><Badge className={`${scoreBadge(m.overallScore)} text-sm font-semibold`}>{m.overallScore}</Badge></div></div>
+          <div><div className="flex justify-between text-xs mb-1"><span className="text-gray-500 font-semibold">Overall Score</span><span className="font-semibold">{m.overallScore}/100</span></div><div className="h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-blue-600 rounded-full" style={{width:m.overallScore+"%"}}/></div></div>
+          <div className="space-y-2">{rows.map(([l,v,c], i) => (<div key={i} className="flex justify-between items-center"><span className="text-xs text-gray-600 font-semibold">{l}</span><Badge className={bc[c]||bc.blue}>{v}</Badge></div>))}</div>
+        </div>
+      );
+    }
+
+    /* ════════════════════════════════════════════
+       CALL LOG
+       ════════════════════════════════════════════ */
+    function generateCalls(advisor, month, dayOfMonth) {
+      const seed = hash(advisor.id + "-calls-" + month + "-" + dayOfMonth), r = sRng(seed), wk = Math.floor((dayOfMonth-1)/7), m = genMetrics(advisor, month, "day", wk, dayOfMonth);
+      const baseCount = 8 + Math.round(r() * 12), count = Math.max(3, Math.round(baseCount * advisor.weeklyHours / 40)), dailyHours = advisor.weeklyHours / 5, calls = [];
+      for (let i = 0; i < count; i++) {
+        const cr = sRng(hash(advisor.id + "-c" + month + "-" + dayOfMonth + "-" + i)), minOff = Math.round((i/count)*dailyHours*60 + (cr()-0.5)*20), mins = Math.max(0, Math.min(Math.round(dailyHours*60)-1, minOff));
+        const hr = 9 + Math.floor(mins/60), mn = mins%60, ap = hr>=12?"PM":"AM", dh = hr>12?hr-12:hr;
+        const vp = (base, range) => Math.max(0, Math.min(100, Math.round(base + (cr()-0.5)*range))), dur = Math.max(3, Math.round((m.averageHandleTime + (cr()-0.5)*8)*10)/10);
+        const sp = vp(m.callSentimentPositive,20), sn = vp(m.callSentimentNegative,10), oppId = cr() < 0.35;
+        calls.push({ id:i+1, timestamp:`${dh}:${String(mn).padStart(2,"0")} ${ap}`, duration:dur, conversationalBalance:vp(m.conversationalBalance,16), clientConcernsCovered:vp(m.clientConcernsCovered,16), followUpClarity:vp(m.followUpClarity,14), callSentimentPositive:sp, callSentimentNeutral:Math.max(0,100-sp-sn), callSentimentNegative:sn, informationAccuracy:vp(m.informationAccuracy,10), securityCompliance:vp(m.securityCompliance,8), opportunityIdentified:oppId, opportunityActioned:oppId&&cr()<0.6, introTime:Math.max(0.2,Math.round((m.introTime+(cr()-0.5)*0.4)*10)/10), authenticationTime:Math.max(0.3,Math.round((m.authenticationTime+(cr()-0.5)*0.6)*10)/10), kycTime:Math.max(0.3,Math.round((m.kycTime+(cr()-0.5)*0.6)*10)/10), redemptionDetailsTime:Math.max(0.5,Math.round((m.redemptionDetailsTime+(cr()-0.5)*1)*10)/10), confirmationsDisclosuresTime:Math.max(0.3,Math.round((m.confirmationsDisclosuresTime+(cr()-0.5)*0.6)*10)/10), outroTime:Math.max(0.2,Math.round((m.outroTime+(cr()-0.5)*0.3)*10)/10) });
+      }
+      return calls;
+    }
+    const callMetricCats = [
+      {cat:"Call Time Breakdown",rows:[{l:"Intro",get:c=>c.introTime,fmt:v=>v+"m",badge:v=>v<=0.9?"bg-green-100 text-green-800":v<=1.0?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Authentication",get:c=>c.authenticationTime,fmt:v=>v+"m",badge:v=>v<=2.2?"bg-green-100 text-green-800":v<=2.6?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"KYC",get:c=>c.kycTime,fmt:v=>v+"m",badge:v=>v<=2.8?"bg-green-100 text-green-800":v<=3.3?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Redemption Details",get:c=>c.redemptionDetailsTime,fmt:v=>v+"m",badge:v=>v<=4.3?"bg-green-100 text-green-800":v<=5.0?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Confirmations & Disclosures",get:c=>c.confirmationsDisclosuresTime,fmt:v=>v+"m",badge:v=>v<=2.8?"bg-green-100 text-green-800":v<=3.2?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Outro",get:c=>c.outroTime,fmt:v=>v+"m",badge:v=>v<=0.9?"bg-green-100 text-green-800":v<=1.0?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+      {cat:"Quality",rows:[{l:"Conversational Balance",get:c=>c.conversationalBalance,fmt:v=>v>=80?"High":v>=60?"Medium":"Low",badge:v=>v>=80?"bg-green-100 text-green-800":v>=60?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Client Concerns Covered",get:c=>c.clientConcernsCovered,fmt:v=>v+"%",badge:v=>v>=80?"bg-green-100 text-green-800":v>=70?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Follow-up Clarity",get:c=>c.followUpClarity,fmt:v=>v>=80?"High":v>=60?"Medium":"Low",badge:v=>v>=80?"bg-green-100 text-green-800":v>=60?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Information Accuracy",get:c=>c.informationAccuracy,fmt:v=>v+"%",badge:v=>v>=80?"bg-green-100 text-green-800":v>=70?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Security Compliance",get:c=>c.securityCompliance,fmt:v=>v+"%",badge:v=>v>=80?"bg-green-100 text-green-800":v>=70?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+      {cat:"Experience",rows:[{l:"Positive Sentiment",get:c=>c.callSentimentPositive,fmt:v=>v+"%",badge:v=>v>=55?"bg-green-100 text-green-800":v>=45?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Neutral Sentiment",get:c=>c.callSentimentNeutral,fmt:v=>v+"%",badge:()=>"bg-gray-100 text-gray-700"},{l:"Negative Sentiment",get:c=>c.callSentimentNegative,fmt:v=>v+"%",badge:v=>v<=15?"bg-green-100 text-green-800":v<=20?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+      {cat:"Opportunities",rows:[{l:"Opportunity Identified",get:c=>c.opportunityIdentified,fmt:v=>v?"Yes":"No",badge:v=>v?"bg-green-100 text-green-800":"bg-gray-100 text-gray-600"},{l:"Opportunity Actioned",get:c=>c.opportunityActioned,fmt:v=>v?"Yes":"No",badge:v=>v?"bg-green-100 text-green-800":"bg-gray-100 text-gray-600"}]},
+    ];
+    function CallLog({advisor, month, dayOfMonth, onBack}) {
+      const calls = useMemo(() => generateCalls(advisor, month, dayOfMonth), [advisor, month, dayOfMonth]);
+      const [expanded, setExpanded] = useState(null); const [collCats, setCollCats] = useState({});
+      const toggleCat = c => setCollCats(p => ({...p,[c]:!p[c]}));
+      const dt = new Date(2026, month-1, dayOfMonth), dateLabel = `${DN[dt.getDay()]} ${MN[month-1]} ${dayOfMonth}, 2026`;
+      const avgScore = c => Math.round([c.conversationalBalance,c.clientConcernsCovered,c.followUpClarity,c.informationAccuracy,c.securityCompliance].reduce((a,b)=>a+b,0)/5);
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 flex-wrap"><button onClick={onBack} className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50"><ArrowLeft className="w-4 h-4"/>Back</button><div><h2 className="text-lg font-semibold">{advisor.name} — Call Log</h2><p className="text-xs text-gray-500">{dateLabel} · {calls.length} calls · {advisor.weeklyHours}h/week</p></div></div>
+          <div className="space-y-2">{calls.map(c => { const isExp = expanded === c.id, avg = avgScore(c); return (
+            <div key={c.id} className="bg-white rounded-xl border overflow-hidden">
+              <button onClick={() => setExpanded(isExp ? null : c.id)} className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"><div className="flex items-center justify-between"><div className="flex items-center gap-4"><span className="text-xs text-gray-400 w-8">#{c.id}</span><span className="text-sm text-gray-700 w-20">{c.timestamp}</span><div className="flex items-center gap-1 text-xs text-gray-500 w-16"><Clock className="w-3 h-3"/>{c.duration}m</div><Badge className={`${scoreBadge(avg)} text-xs`}>Avg: {avg}</Badge>{c.opportunityIdentified && <Badge className={c.opportunityActioned?"bg-green-100 text-green-800 text-xs":"bg-yellow-100 text-yellow-800 text-xs"}>{c.opportunityActioned?"Opp Actioned":"Opp Identified"}</Badge>}</div>{isExp ? <ChevronUp className="w-4 h-4 text-gray-400"/> : <ChevronDown className="w-4 h-4 text-gray-400"/>}</div></button>
+              {isExp && (<div className="border-t"><table className="w-full table-fixed"><colgroup><col className="w-56"/><col className="w-40"/><col/></colgroup><tbody>{callMetricCats.map(cat => { const isOpen = !collCats[c.id+"-"+cat.cat]; return (<React.Fragment key={cat.cat}><tr className="bg-gray-100 cursor-pointer hover:bg-gray-200" onClick={() => toggleCat(c.id+"-"+cat.cat)}><td colSpan={3} className="px-5 py-2"><div className="flex items-center gap-2">{isOpen?<ChevronUp className="w-3.5 h-3.5 text-gray-500"/>:<ChevronDown className="w-3.5 h-3.5 text-gray-500"/>}<span className="text-xs font-semibold text-gray-600">{cat.cat}</span></div></td></tr>{isOpen && cat.rows.map((row,ri) => { const v = row.get(c); return (<tr key={row.l} className={ri%2===0?"bg-white":"bg-gray-50"}><td className="px-5 py-2 text-sm text-gray-700">{row.l}</td><td className="px-5 py-2"><Badge className={`${row.badge(v)} text-xs px-2.5 py-0.5`}>{row.fmt(v)}</Badge></td><td></td></tr>); })}</React.Fragment>); })}</tbody></table></div>)}
+            </div>); })}</div>
+        </div>
+      );
+    }
+
+    /* ════════════════════════════════════════════
+       COMPARE PAGE
+       ════════════════════════════════════════════ */
+    const compareCategories = [
+      {cat:"Operational",rows:[{l:"Work Hours/Week",get:(_,a)=>a.weeklyHours,fmt:v=>v+"h",badge:()=>"bg-blue-100 text-blue-800"},{l:"Calls per Hour",get:m=>m.callsPerHour,fmt:v=>v.toFixed(1),badge:v=>v>=4.5?"bg-green-100 text-green-800":v>=3.5?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Avg Handle Time",get:m=>m.averageHandleTime,fmt:v=>v+"m",badge:v=>v<=13.5?"bg-green-100 text-green-800":v<=15?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"% Day On Calls",get:m=>m.pctDayOnCalls,fmt:v=>v+"%",badge:v=>v>=70?"bg-green-100 text-green-800":v>=60?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"% Day Off Calls",get:m=>100-m.pctDayOnCalls,fmt:v=>v+"%",badge:v=>v<=30?"bg-green-100 text-green-800":v<=40?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+      {cat:"Call Time Breakdown",rows:[{l:"Intro",get:m=>m.introTime,fmt:v=>v+"m",badge:v=>v<=0.9?"bg-green-100 text-green-800":v<=1.0?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Authentication",get:m=>m.authenticationTime,fmt:v=>v+"m",badge:v=>v<=2.2?"bg-green-100 text-green-800":v<=2.6?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"KYC",get:m=>m.kycTime,fmt:v=>v+"m",badge:v=>v<=2.8?"bg-green-100 text-green-800":v<=3.3?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Redemption Details",get:m=>m.redemptionDetailsTime,fmt:v=>v+"m",badge:v=>v<=4.3?"bg-green-100 text-green-800":v<=5.0?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Confirmations & Disclosures",get:m=>m.confirmationsDisclosuresTime,fmt:v=>v+"m",badge:v=>v<=2.8?"bg-green-100 text-green-800":v<=3.2?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Outro",get:m=>m.outroTime,fmt:v=>v+"m",badge:v=>v<=0.9?"bg-green-100 text-green-800":v<=1.0?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+      {cat:"Quality",rows:[{l:"Conversational Balance",get:m=>m.conversationalBalance,fmt:v=>v>=80?"High":v>=60?"Medium":"Low",badge:v=>v>=80?"bg-green-100 text-green-800":v>=60?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Client Concerns Covered",get:m=>m.clientConcernsCovered,fmt:v=>v+"%",badge:v=>v>=80?"bg-green-100 text-green-800":v>=70?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Follow-up Clarity",get:m=>m.followUpClarity,fmt:v=>v>=80?"High":v>=60?"Medium":"Low",badge:v=>v>=80?"bg-green-100 text-green-800":v>=60?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+      {cat:"Experience",rows:[{l:"Positive Sentiment",get:m=>m.callSentimentPositive,fmt:v=>v+"%",badge:v=>v>=55?"bg-green-100 text-green-800":v>=45?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"},{l:"Neutral Sentiment",get:m=>m.callSentimentNeutral,fmt:v=>v+"%",badge:()=>"bg-gray-100 text-gray-700"},{l:"Negative Sentiment",get:m=>m.callSentimentNegative,fmt:v=>v+"%",badge:v=>v<=15?"bg-green-100 text-green-800":v<=20?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+      {cat:"Opportunities",rows:[{l:"Opportunities Identified",get:m=>m.opportunitiesIdentified,fmt:v=>""+v,badge:()=>"bg-blue-100 text-blue-800"},{l:"Opportunities Actioned",get:m=>m.opportunitiesActioned,fmt:v=>""+v,badge:()=>"bg-blue-100 text-blue-800"},{l:"Conversion Rate",get:m=>m.opportunitiesIdentified>0?Math.round(m.opportunitiesActioned/m.opportunitiesIdentified*100):0,fmt:v=>v+"%",badge:v=>v>=60?"bg-green-100 text-green-800":v>=40?"bg-yellow-100 text-yellow-800":"bg-red-100 text-red-800"}]},
+    ];
+    function ComparePage({advisors, tp}) {
+      const [sel, setSel] = useState([advisors[0]?.id, advisors[2]?.id]); const [collapsed, setCollapsed] = useState({});
+      const toggle = cat => setCollapsed(p => ({...p,[cat]:!p[cat]}));
+      const selected = sel.map(id => advisors.find(a => a.id === id)).filter(Boolean);
+      return (
+        <div className="space-y-5">
+          <h2 className="text-xl font-semibold">Compare Advisors</h2>
+          <div className="flex gap-2 flex-wrap">{advisors.map(a => (<button key={a.id} onClick={() => setSel(p => p.includes(a.id)?p.filter(x=>x!==a.id):[...p,a.id].slice(-4))} className={`px-4 py-2 rounded-full text-sm border transition-colors ${sel.includes(a.id)?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-600 border-gray-300 hover:border-blue-400"}`}>{a.name}</button>))}</div>
+          {selected.length >= 2 ? (
+            <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full table-fixed"><colgroup><col className="w-56"/>{selected.map(a => <col key={a.id} className="w-48"/>)}<col/></colgroup>
+              <thead><tr className="border-b bg-gray-50"><th className="text-left px-5 py-3 text-sm font-semibold text-gray-600">Metric</th>{selected.map(a => (<th key={a.id} className="text-left px-5 py-3 text-sm font-semibold text-gray-900">{a.name}<div className="text-xs font-normal text-gray-400 mt-0.5">{a.callType==="redemption"?"Redemptions":"Appointments"}</div></th>))}<th></th></tr></thead>
+              <tbody>{compareCategories.map(cat => { const isOpen = !collapsed[cat.cat]; return (<React.Fragment key={cat.cat}><tr className="bg-gray-100 cursor-pointer hover:bg-gray-200" onClick={() => toggle(cat.cat)}><td colSpan={selected.length+2} className="px-5 py-2.5"><div className="flex items-center gap-2">{isOpen?<ChevronUp className="w-4 h-4 text-gray-500"/>:<ChevronDown className="w-4 h-4 text-gray-500"/>}<span className="text-sm font-semibold text-gray-700">{cat.cat}</span><span className="text-xs text-gray-400">{cat.rows.length} metrics</span></div></td></tr>{isOpen && cat.rows.map((row,ri) => (<tr key={row.l} className={ri%2===0?"bg-white":"bg-gray-50"}><td className="px-5 py-3 text-sm text-gray-700 font-medium">{row.l}</td>{selected.map(a => { const v = row.get(a.metricsByPeriod[tp],a); return (<td key={a.id} className="px-5 py-3"><Badge className={`${row.badge(v)} text-sm px-3 py-1`}>{row.fmt(v)}</Badge></td>); })}<td></td></tr>))}</React.Fragment>); })}</tbody>
+            </table></div>
+          ) : <div className="bg-white rounded-xl border p-10 text-center text-gray-500">Select at least 2 advisors to compare.</div>}
+        </div>
+      );
+    }
+
+    /* ════════════════════════════════════════════
+       FLOWS TAB
+       ════════════════════════════════════════════ */
+    function genFlowDay(month, day) {
+      const r = sRng(hash("flow-" + month + "-" + day));
+      const sf = {1:0.95,2:0.97,3:1.02,4:1.05,5:1.03,6:0.98,7:0.92,8:0.90,9:1.00,10:1.04,11:1.06,12:0.96};
+      const s = sf[month]||1, dt = new Date(2026,month-1,day), dw = dt.getDay(), dn = DN[dw], we = dw===0||dw===6;
+      const dim = daysInMonth(month), df = we?0.3:1.15, wd = cwd(2026,month,dim), wk = dim-wd;
+      const nm = 1/(wd*1.15+wk*0.3), n = () => 1+(r()-0.5)*0.4;
+      const mi=4/12, mo=12/12, mt=20/12, mr=5/12;
+      const gi = Math.max(0.001, Math.round(mi*s*df*nm*n()*1e4)/1e4), go = Math.max(0.005, Math.round(mo*s*df*nm*n()*1e4)/1e4);
+      const ti = Math.max(0.01, Math.round(mt*s*df*nm*n()*1e4)/1e4), ir = Math.round(mr*s*df*nm*n()*1e4)/1e4;
+      return { dayLabel:`${dn} ${day}`, month, year:2026, dayOfMonth:day, weekIndex:Math.floor((day-1)/7), grossInflows:gi, grossOutflows:go, transfersIn:ti, investmentReturns:ir, netFlow:Math.round((gi-go+ti+ir)*1e4)/1e4 };
+    }
+    function getFlowDays(month) { return Array.from({length:daysInMonth(month)}, (_,i) => genFlowDay(month,i+1)); }
+    function getFlowWeek(month, wk) { const dim=daysInMonth(month), s=wk*7+1, e=Math.min(s+6,dim), d=[]; for(let i=s;i<=e;i++) d.push(genFlowDay(month,i)); return d; }
+    function aggFlowDays(days, label) { const sum = f => Math.round(days.reduce((a,d)=>a+d[f],0)*100)/100; return {label, grossInflows:sum("grossInflows"), grossOutflows:sum("grossOutflows"), transfersIn:sum("transfersIn"), investmentReturns:sum("investmentReturns"), netFlow:sum("netFlow")}; }
+    function getFlowWeeklyAgg(month) { const wks=weeksInMonth(month); return Array.from({length:wks},(_,i)=>{const days=getFlowWeek(month,i), dim=daysInMonth(month), s=i*7+1, e=Math.min(s+6,dim); return {...aggFlowDays(days,`Wk ${i+1} (${s}-${e})`), weekIndex:i}; }); }
+    function getFlowMonthlyAgg() { return MONTHS.map(m => ({...aggFlowDays(getFlowDays(m), MN[m-1]), month:m})); }
+    const AUM = 3000;
+    function fmtNom(v) { const m = (v / 100) * AUM; return m >= 1000 ? `${(m/1000).toFixed(2)}B` : m >= 1 ? `${m.toFixed(2)}M` : `${(m*1000).toFixed(0)}K`; }
+
+    function FlowsPage() {
+      const [tp, setTp] = useState("monthly"); const [selMonth, setSelMonth] = useState(3); const [selWeek, setSelWeek] = useState(0); const [viewMode, setViewMode] = useState("pct");
+      const weeks = useMemo(() => { const n = weeksInMonth(selMonth); return Array.from({length:n}, (_,i) => { const s=i*7+1, e=Math.min(s+6, daysInMonth(selMonth)); return {idx:i, label:`Week ${i+1}`, range:`${MN[selMonth-1]} ${s}–${e}`}; }); }, [selMonth]);
+      const handleMonthChange = m => { setSelMonth(m); setSelWeek(0); };
+      const fmt = v => viewMode === "pct" ? fmtPct(v) : fmtNom(v);
+      const periodLabel = tp === "monthly" ? "Full year" : tp === "weekly" ? MN[selMonth-1] : `Week ${selWeek+1}`;
+      const { chartData, summary, tableData } = useMemo(() => {
+        if (tp === "monthly") { const monthly = getFlowMonthlyAgg(); const cd = monthly.map(d => ({label:d.label, Inflows:+d.grossInflows.toFixed(2), Outflows:+d.grossOutflows.toFixed(2), Transfers:+d.transfersIn.toFixed(2), Returns:+d.investmentReturns.toFixed(2), Net:+d.netFlow.toFixed(2)})); const sum = aggFlowDays(MONTHS.flatMap(m => getFlowDays(m)), "2026"); return { chartData:cd, summary:sum, tableData:monthly.map(d => ({label:d.label,...d})) }; }
+        if (tp === "weekly") { const wkAgg = getFlowWeeklyAgg(selMonth); const cd = wkAgg.map(d => ({label:d.label, Inflows:+d.grossInflows.toFixed(2), Outflows:+d.grossOutflows.toFixed(2), Transfers:+d.transfersIn.toFixed(2), Returns:+d.investmentReturns.toFixed(2), Net:+d.netFlow.toFixed(2)})); const sum = aggFlowDays(getFlowDays(selMonth), MN[selMonth-1]+" 2026"); return { chartData:cd, summary:sum, tableData:wkAgg.map(d => ({label:d.label,...d})) }; }
+        const days = getFlowWeek(selMonth, selWeek); const cd = days.map(d => ({label:d.dayLabel, Inflows:+d.grossInflows.toFixed(2), Outflows:+d.grossOutflows.toFixed(2), Transfers:+d.transfersIn.toFixed(2), Returns:+d.investmentReturns.toFixed(2), Net:+d.netFlow.toFixed(2)})); const sum = aggFlowDays(days, `Week ${selWeek+1}`);
+        return { chartData:cd, summary:sum, tableData:days.map(d => ({label:d.dayLabel,...d})) };
+      }, [tp, selMonth, selWeek]);
+      const cards = [{l:"Gross Inflows",v:fmt(summary.grossInflows),col:"text-green-700",dot:"bg-green-500"},{l:"Gross Outflows",v:fmt(summary.grossOutflows),col:"text-red-700",dot:"bg-red-500"},{l:"Transfers In",v:fmt(summary.transfersIn),col:"text-blue-700",dot:"bg-blue-500"},{l:"Investment Returns",v:fmt(summary.investmentReturns),col:"text-purple-700",dot:"bg-purple-500"},{l:"Net Flow",v:fmt(summary.netFlow),col:summary.netFlow>=0?"text-green-700":"text-red-700",dot:summary.netFlow>=0?"bg-green-500":"bg-red-500"}];
+      return (
+        <div className="space-y-5">
+          <h2 className="text-lg font-semibold">Flows — Fund Movement Overview</h2>
+          <div className="flex gap-6 border-b">{[{k:"pct",l:"% of AUM"},{k:"nominal",l:"Nominal ($)"}].map(t => (<button key={t.k} onClick={() => setViewMode(t.k)} className={`px-1 py-2.5 border-b-2 text-xs font-medium transition-colors ${viewMode===t.k?"border-blue-600 text-blue-600":"border-transparent text-gray-500 hover:text-gray-700"}`}>{t.l}</button>))}</div>
+          <div className="flex flex-wrap gap-3 items-center"><div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">{[{k:"daily",l:"Daily"},{k:"weekly",l:"Weekly"},{k:"monthly",l:"Monthly"}].map(t => (<button key={t.k} onClick={() => setTp(t.k)} className={`px-3 py-1.5 rounded-md text-xs ${tp===t.k?"bg-white text-blue-700 shadow-sm font-medium":"text-gray-500"}`}>{t.l}</button>))}</div>{tp !== "monthly" && (<select value={selMonth} onChange={e => handleMonthChange(+e.target.value)} className="px-3 py-1.5 border rounded-md text-xs bg-white">{MONTHS.map(m => <option key={m} value={m}>{MN[m-1]} 2026</option>)}</select>)}</div>
+          {tp === "daily" && (<div className="flex flex-wrap gap-1.5 items-center"><span className="text-xs text-gray-500 mr-1">Week:</span>{weeks.map(w => (<button key={w.idx} onClick={() => setSelWeek(w.idx)} className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${selWeek===w.idx?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-600 border-gray-300 hover:border-blue-400"}`}>{w.label} <span className="text-[10px] opacity-70">({w.range})</span></button>))}</div>)}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">{cards.map((c,i) => (<div key={i} className="bg-white rounded-xl border p-4"><div className="flex items-center gap-1.5 mb-1"><span className={`w-2.5 h-2.5 rounded-full ${c.dot}`}/><p className="text-xs text-gray-500 font-medium">{c.l}</p></div><p className={`text-xl font-bold mt-1 ${c.col}`}>{c.v}</p></div>))}</div>
+          <div className="bg-white rounded-xl border p-5">
+            <h3 className="font-semibold mb-3">Flow Trends {viewMode === "pct" ? "(% of AUM)" : "(Nominal $)"}</h3>
+            <div className="h-64"><ResponsiveContainer><ComposedChart data={chartData} barCategoryGap="25%" barGap={2}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX} tickFormatter={viewMode==="nominal" ? v => fmtNom(v) : undefined}/><Tooltip formatter={v => viewMode==="nominal" ? fmtNom(v) : fmtPct(v)}/><Legend wrapperStyle={LG}/><Bar dataKey="Inflows" fill="#22c55e" stackId="a" barSize={tp==="monthly"?20:tp==="weekly"?28:18}/><Bar dataKey="Transfers" fill="#3b82f6" stackId="a"/><Bar dataKey="Outflows" fill="#ef4444" radius={[4,4,0,0]} barSize={tp==="monthly"?20:tp==="weekly"?28:18}/><Line type="monotone" dataKey="Returns" stroke="#a855f7" strokeWidth={2} dot={{r:3,fill:"#a855f7"}}/><Line type="monotone" dataKey="Net" stroke="#f59e0b" strokeWidth={2} dot={{r:3,fill:"#f59e0b"}}/></ComposedChart></ResponsiveContainer></div>
+          </div>
+          <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b"><th className="text-left px-3 py-2">Period</th><th className="text-right px-3 py-2">Inflows</th><th className="text-right px-3 py-2">Outflows</th><th className="text-right px-3 py-2">Transfers</th><th className="text-right px-3 py-2">Returns</th><th className="text-right px-3 py-2 font-bold">Net Flow</th></tr></thead><tbody>{tableData.map((d,i) => (<tr key={i} className={i%2?"bg-gray-50":""}><td className="px-3 py-1.5">{d.label}</td><td className="text-right px-3 py-1.5 text-green-700">{fmt(d.grossInflows)}</td><td className="text-right px-3 py-1.5 text-red-700">{fmt(d.grossOutflows)}</td><td className="text-right px-3 py-1.5 text-blue-700">{fmt(d.transfersIn)}</td><td className="text-right px-3 py-1.5 text-purple-700">{fmt(d.investmentReturns)}</td><td className={`text-right px-3 py-1.5 font-semibold ${d.netFlow>=0?"text-green-700":"text-red-700"}`}>{fmt(d.netFlow)}</td></tr>))}</tbody></table></div>
+        </div>
+      );
+    }
+
+    /* ════════════════════════════════════════════
+       NPS TAB
+       ════════════════════════════════════════════ */
+    const npsAllDays = (() => {
+      const r = sRng(77777);
+      const sf = {1:0.92,2:0.95,3:1.02,4:1.05,5:1.08,6:1.03,7:0.90,8:0.88,9:1.00,10:1.05,11:1.07,12:0.95};
+      const data = [];
+      for (let m = 1; m <= 12; m++) {
+        const dim = daysInMonth(m), s = sf[m] || 1;
+        for (let d = 1; d <= dim; d++) {
+          const dt = new Date(2026, m-1, d), dw = dt.getDay(), dn = DN[dw], we = dw===0||dw===6;
+          const resp = Math.max(5, Math.round((we?10:30) * s * (1 + (r()-0.5)*0.3)));
+          const pp = 0.37 + (r()-0.5)*0.16, dp = Math.max(0.05, 0.17 + (r()-0.5)*0.10);
+          const pr = Math.max(0, Math.round(resp*pp)), de = Math.max(0, Math.round(resp*dp)), pa = Math.max(0, resp-pr-de);
+          const ppct = pr/resp*100, dpct = de/resp*100;
+          data.push({ dayLabel:`${dn} ${d}`, month:m, year:2026, dayOfMonth:d, weekIndex:Math.floor((d-1)/7),
+            responses:resp, promoters:pr, passives:pa, detractors:de,
+            promotersPct:+ppct.toFixed(1), passivesPct:+(pa/resp*100).toFixed(1), detractorsPct:+dpct.toFixed(1),
+            npsScore:Math.round(ppct-dpct) });
+        }
+      }
+      return data;
+    })();
+    function aggNpsGroup(data, keyFn, labelFn) {
+      const b = new Map();
+      data.forEach(x => { const k = keyFn(x); if (!b.has(k)) b.set(k, []); b.get(k).push(x); });
+      return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => {
+        const rs = it.reduce((a,x)=>a+x.responses,0), p = it.reduce((a,x)=>a+x.promoters,0);
+        const pa = it.reduce((a,x)=>a+x.passives,0), de = it.reduce((a,x)=>a+x.detractors,0);
+        const ppct = p/rs*100, dpct = de/rs*100;
+        return { ...labelFn(it[0]), month:it[0].month, year:it[0].year, weekIndex:it[0].weekIndex,
+          responses:rs, promoters:p, passives:pa, detractors:de,
+          promotersPct:+ppct.toFixed(1), passivesPct:+(pa/rs*100).toFixed(1), detractorsPct:+dpct.toFixed(1),
+          npsScore:Math.round(ppct-dpct) };
+      });
+    }
+    const npsWeeklyAll = aggNpsGroup(npsAllDays, x=>`${x.year}-${x.month}-${x.weekIndex}`, x=>{const dim=daysInMonth(x.month),s=x.weekIndex*7+1,e=Math.min(s+6,dim);return{label:`Wk ${x.weekIndex+1} (${s}–${e})`};});
+    const npsMonthlyAll = aggNpsGroup(npsAllDays, x=>`${x.year}-${x.month}`, x=>({label:MN[x.month-1]}));
+
+    const PROM_REASONS = ["Friendly Advisor","Quick Service","Concerns Resolved","Good Professionalism","Delightful Experience"];
+    const DET_REASONS = ["Long Wait Times","Poor Customer Service","Rude Advisor","Lack of Professionalism","Concerns Not Resolved","Upset About Transfer"];
+    const FB_FIELDS = [...PROM_REASONS, ...DET_REASONS];
+    const fbReasonDays = npsAllDays.map(d => {
+      const rd = sRng(hash("fbr-" + d.month + "-" + d.dayOfMonth));
+      const o = { month:d.month, year:d.year, weekIndex:d.weekIndex, dayLabel:d.dayLabel };
+      const pw = PROM_REASONS.map(() => 0.2 + (rd()-0.5)*0.1), pt = pw.reduce((a,w)=>a+w,0);
+      let pr = d.promoters;
+      PROM_REASONS.forEach((r,i) => { if(i===PROM_REASONS.length-1) o[r]=Math.max(0,pr); else { const c=Math.max(0,Math.round(d.promoters*pw[i]/pt)); o[r]=c; pr-=c; } });
+      const dw2 = DET_REASONS.map(() => 1/6 + (rd()-0.5)*0.06), dt2 = dw2.reduce((a,w)=>a+w,0);
+      let dr = d.detractors;
+      DET_REASONS.forEach((r,i) => { if(i===DET_REASONS.length-1) o[r]=Math.max(0,dr); else { const c=Math.max(0,Math.round(d.detractors*dw2[i]/dt2)); o[r]=c; dr-=c; } });
+      return o;
+    });
+    function aggFbReasons(data,keyFn,labelFn){const b=new Map();data.forEach(x=>{const k=keyFn(x);if(!b.has(k))b.set(k,[]);b.get(k).push(x);});return[...b.entries()].sort(([a],[c])=>a.localeCompare(c)).map(([,it])=>{const o={...labelFn(it[0]),month:it[0].month,year:it[0].year,weekIndex:it[0].weekIndex};FB_FIELDS.forEach(f=>{o[f]=it.reduce((a,x)=>a+(x[f]||0),0);});return o;});}
+    const fbWeeklyAll = aggFbReasons(fbReasonDays, x=>`${x.year}-${x.month}-${x.weekIndex}`, x=>{const dim=daysInMonth(x.month),s=x.weekIndex*7+1,e=Math.min(s+6,dim);return{label:`Wk ${x.weekIndex+1} (${s}–${e})`};});
+    const fbMonthlyAll = aggFbReasons(fbReasonDays, x=>`${x.year}-${x.month}`, x=>({label:MN[x.month-1]}));
+
+    function NpsPage() {
+      const [subTab,setSubTab]=useState("scores"); const [gran,setGran]=useState("monthly"); const [selMonth,setSelMonth]=useState(3); const [selWeek,setSelWeek]=useState(0);
+      const weeks = useMemo(() => { const n=weeksInMonth(selMonth); return Array.from({length:n},(_,i)=>{const s=i*7+1,e=Math.min(s+6,daysInMonth(selMonth));return{idx:i,label:`Week ${i+1}`,range:`${MN[selMonth-1]} ${s}–${e}`};}); },[selMonth]);
+      const handleMonthChange = m => { setSelMonth(m); setSelWeek(0); };
+      const { npsData, npsSummary } = useMemo(() => {
+        const compute = arr => { const rs=arr.reduce((a,d)=>a+d.responses,0),p=arr.reduce((a,d)=>a+d.promoters,0),pa=arr.reduce((a,d)=>a+d.passives,0),de=arr.reduce((a,d)=>a+d.detractors,0); return {responses:rs,promoters:p,passives:pa,detractors:de,nps:Math.round(p/rs*100-de/rs*100),promPct:+(p/rs*100).toFixed(1),detPct:+(de/rs*100).toFixed(1)}; };
+        if (gran==="monthly") return {npsData:npsMonthlyAll, npsSummary:compute(npsMonthlyAll)};
+        if (gran==="weekly") { const wks=npsWeeklyAll.filter(d=>d.month===selMonth); return {npsData:wks, npsSummary:compute(wks)}; }
+        const days=npsAllDays.filter(d=>d.month===selMonth&&d.weekIndex===selWeek);
+        return {npsData:days.map(d=>({...d,label:d.dayLabel})), npsSummary:compute(days)};
+      },[gran,selMonth,selWeek]);
+      const chartData = npsData.map(d => ({label:d.label||d.dayLabel, Promoters:d.promoters, Passives:d.passives, Detractors:d.detractors, NPS:d.npsScore}));
+      const fbData = useMemo(() => {
+        if (gran === "monthly") return fbMonthlyAll;
+        return fbWeeklyAll.filter(d => d.month === selMonth);
+      }, [gran, selMonth]);
+      const granLabel = gran==="monthly"?"Monthly":gran==="weekly"?"Weekly":"Daily";
+      return (
+        <div className="space-y-5">
+          <h2 className="text-lg font-semibold">Net Promoter Score</h2>
+          <div className="flex gap-6 border-b">{[{k:"scores",l:"NPS Scores",i:Star},{k:"feedback",l:"Feedback",i:MessageSquare}].map(t => (<button key={t.k} onClick={() => setSubTab(t.k)} className={`flex items-center gap-1.5 px-1 py-2.5 border-b-2 text-xs ${subTab===t.k?"border-blue-600 text-blue-600 font-medium":"border-transparent text-gray-500"}`}><t.i className="w-3.5 h-3.5"/>{t.l}</button>))}</div>
+          {subTab==="scores" && <>
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">{[{k:"daily",l:"Daily"},{k:"weekly",l:"Weekly"},{k:"monthly",l:"Monthly"}].map(t => (<button key={t.k} onClick={() => setGran(t.k)} className={`px-3 py-1.5 rounded-md text-xs ${gran===t.k?"bg-white text-blue-700 shadow-sm font-medium":"text-gray-500"}`}>{t.l}</button>))}</div>
+              {gran !== "monthly" && (<select value={selMonth} onChange={e => handleMonthChange(+e.target.value)} className="px-3 py-1.5 border rounded-md text-xs bg-white">{MONTHS.map(m => <option key={m} value={m}>{MN[m-1]} 2026</option>)}</select>)}
+            </div>
+            {gran === "daily" && (<div className="flex flex-wrap gap-1.5 items-center"><span className="text-xs text-gray-500 mr-1">Week:</span>{weeks.map(w => (<button key={w.idx} onClick={() => setSelWeek(w.idx)} className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${selWeek===w.idx?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-600 border-gray-300 hover:border-blue-400"}`}>{w.label} <span className="text-[10px] opacity-70">({w.range})</span></button>))}</div>)}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{[{l:"NPS Score",v:npsSummary.nps,col:"text-blue-600",dot:"bg-blue-500"},{l:"Total Responses",v:npsSummary.responses,col:"text-gray-900",dot:"bg-gray-400"},{l:"Promoters",v:npsSummary.promPct+"%",col:"text-green-600",dot:"bg-green-500"},{l:"Detractors",v:npsSummary.detPct+"%",col:"text-red-600",dot:"bg-red-500"}].map((c,i) => (<div key={i} className="bg-white rounded-xl border p-4"><div className="flex items-center gap-1.5 mb-1"><span className={`w-2.5 h-2.5 rounded-full ${c.dot}`}/><p className="text-xs text-gray-500 font-medium">{c.l}</p></div><p className={`text-xl font-bold mt-1 ${c.col}`}>{typeof c.v==='number'?c.v.toLocaleString():c.v}</p></div>))}</div>
+            <div className="bg-white rounded-xl border p-5">
+              <h3 className="font-semibold mb-3">{granLabel} NPS Distribution</h3>
+              <div className="h-64"><ResponsiveContainer><BarChart data={chartData} barCategoryGap="20%" margin={{top:35}}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Detractors" fill="#ef4444" stackId="a"/><Bar dataKey="Passives" fill="#fbbf24" stackId="a"/><Bar dataKey="Promoters" fill="#22c55e" stackId="a" radius={[4,4,0,0]}><LabelList dataKey="NPS" position="top" style={{fontSize:18,fontWeight:700,fill:'#3b82f6'}}/></Bar></BarChart></ResponsiveContainer></div>
+            </div>
+            <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b"><th className="text-left px-3 py-2">Period</th><th className="text-right px-3 py-2">Promoters</th><th className="text-right px-3 py-2">Passives</th><th className="text-right px-3 py-2">Detractors</th><th className="text-right px-3 py-2">Responses</th><th className="text-right px-3 py-2 font-bold">NPS</th></tr></thead><tbody>{npsData.map((d,i) => (<tr key={i} className={i%2?"bg-gray-50":""}><td className="px-3 py-1.5">{d.label || d.dayLabel}</td><td className="text-right px-3 py-1.5 text-green-700">{d.promoters.toLocaleString()}</td><td className="text-right px-3 py-1.5 text-amber-600">{d.passives.toLocaleString()}</td><td className="text-right px-3 py-1.5 text-red-700">{d.detractors.toLocaleString()}</td><td className="text-right px-3 py-1.5">{d.responses.toLocaleString()}</td><td className="text-right px-3 py-1.5 font-semibold text-blue-600">{d.npsScore}</td></tr>))}</tbody></table></div>
+          </>}
+          {subTab==="feedback" && <>
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">{[{k:"weekly",l:"Weekly"},{k:"monthly",l:"Monthly"}].map(t => (<button key={t.k} onClick={() => setGran(t.k)} className={`px-3 py-1.5 rounded-md text-xs ${(gran===t.k||(gran==="daily"&&t.k==="weekly"))?"bg-white text-blue-700 shadow-sm font-medium":"text-gray-500"}`}>{t.l}</button>))}</div>
+              {gran !== "monthly" && (<select value={selMonth} onChange={e => handleMonthChange(+e.target.value)} className="px-3 py-1.5 border rounded-md text-xs bg-white">{MONTHS.map(m => <option key={m} value={m}>{MN[m-1]} 2026</option>)}</select>)}
+            </div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">Promoter Feedback Reasons</h3><div className="h-56"><ResponsiveContainer><BarChart data={fbData.map(d => ({label:d.label,...Object.fromEntries(PROM_REASONS.map(r=>[r,d[r]||0]))}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Friendly Advisor" fill="#22c55e" stackId="a"/><Bar dataKey="Quick Service" fill="#f59e0b" stackId="a"/><Bar dataKey="Concerns Resolved" fill="#3b82f6" stackId="a"/><Bar dataKey="Good Professionalism" fill="#8b5cf6" stackId="a"/><Bar dataKey="Delightful Experience" fill="#ec4899" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b"><th className="text-left px-3 py-2 whitespace-nowrap">Period</th>{PROM_REASONS.map(r => <th key={r} className="text-right px-3 py-2 whitespace-nowrap">{r}</th>)}<th className="text-right px-3 py-2 font-bold">Total</th></tr></thead><tbody>{fbData.map((d,i) => (<tr key={i} className={i%2?"bg-gray-50":""}><td className="px-3 py-1.5 whitespace-nowrap">{d.label}</td>{PROM_REASONS.map(r => <td key={r} className="text-right px-3 py-1.5 text-green-700">{(d[r]||0).toLocaleString()}</td>)}<td className="text-right px-3 py-1.5 font-semibold">{PROM_REASONS.reduce((a,r)=>a+(d[r]||0),0).toLocaleString()}</td></tr>))}</tbody></table></div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">Detractor Feedback Reasons</h3><div className="h-56"><ResponsiveContainer><BarChart data={fbData.map(d => ({label:d.label,...Object.fromEntries(DET_REASONS.map(r=>[r,d[r]||0]))}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Long Wait Times" fill="#ef4444" stackId="a"/><Bar dataKey="Poor Customer Service" fill="#f97316" stackId="a"/><Bar dataKey="Rude Advisor" fill="#f59e0b" stackId="a"/><Bar dataKey="Lack of Professionalism" fill="#ec4899" stackId="a"/><Bar dataKey="Concerns Not Resolved" fill="#8b5cf6" stackId="a"/><Bar dataKey="Upset About Transfer" fill="#6366f1" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+            <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b"><th className="text-left px-3 py-2 whitespace-nowrap">Period</th>{DET_REASONS.map(r => <th key={r} className="text-right px-3 py-2 whitespace-nowrap">{r}</th>)}<th className="text-right px-3 py-2 font-bold">Total</th></tr></thead><tbody>{fbData.map((d,i) => (<tr key={i} className={i%2?"bg-gray-50":""}><td className="px-3 py-1.5 whitespace-nowrap">{d.label}</td>{DET_REASONS.map(r => <td key={r} className="text-right px-3 py-1.5 text-red-700">{(d[r]||0).toLocaleString()}</td>)}<td className="text-right px-3 py-1.5 font-semibold">{DET_REASONS.reduce((a,r)=>a+(d[r]||0),0).toLocaleString()}</td></tr>))}</tbody></table></div>
+          </>}
+        </div>
+      );
+    }
+
+    /* ════════════════════════════════════════════
+       VOLUMES — PHONE DATA
+       ════════════════════════════════════════════ */
+    const phoneAllDays = (() => {
+      const r = sRng(33333);
+      const sf = {1:0.92,2:0.95,3:1.02,4:1.05,5:1.08,6:1.03,7:0.90,8:0.88,9:1.00,10:1.05,11:1.07,12:0.95};
+      const raw = [];
+      for (let m = 1; m <= 12; m++) { const dim = daysInMonth(m), s = sf[m] || 1; for (let d = 1; d <= dim; d++) { const dt = new Date(2026, m-1, d), dw = dt.getDay(); if (dw === 0 || dw === 6) continue; raw.push({ month: m, day: d, dw, weight: s * (1 + (r() - 0.5) * 0.3) }); } }
+      const totalW = raw.reduce((a, x) => a + x.weight, 0);
+      return raw.map(x => {
+        const ib = Math.max(1, Math.round((x.weight / totalW) * 100000)), ob = Math.max(0, Math.round((x.weight / totalW) * 5000));
+        const rd = sRng(hash("brk-" + x.month + "-" + x.day));
+        const redPct = 0.53 + (rd() - 0.5) * 0.1, rem = 1 - redPct;
+        const iqR = 0.33 + (rd() - 0.5) * 0.12, baR = 0.33 + (rd() - 0.5) * 0.12;
+        const ibRedemptions = Math.max(0, Math.round(ib * redPct)), ibInvestmentQ = Math.max(0, Math.round(ib * rem * iqR)), ibBookAppt = Math.max(0, Math.round(ib * rem * baR)), ibMisc = Math.max(0, ib - ibRedemptions - ibInvestmentQ - ibBookAppt);
+        const insR = 0.33 + (rd() - 0.5) * 0.12, morR = 0.33 + (rd() - 0.5) * 0.12;
+        const obInsurance = Math.max(0, Math.round(ob * insR)), obMortgages = Math.max(0, Math.round(ob * morR)), obOtherProducts = Math.max(0, ob - obInsurance - obMortgages);
+        return { dayLabel: `${DN[x.dw]} ${x.day}`, month: x.month, year: 2026, dayOfMonth: x.day, weekIndex: Math.floor((x.day - 1) / 7), inbound: ib, outbound: ob, total: ib + ob, ibRedemptions, ibInvestmentQ, ibBookAppt, ibMisc, obInsurance, obMortgages, obOtherProducts };
+      });
+    })();
+    const PH_FIELDS = ["inbound","outbound","total","ibRedemptions","ibInvestmentQ","ibBookAppt","ibMisc","obInsurance","obMortgages","obOtherProducts"];
+    function aggPhoneWeek(data) { const b = new Map(); data.forEach(x => { const k = `${x.year}-${x.month}-${x.weekIndex}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const wi = it[0].weekIndex, m = it[0].month, dim = daysInMonth(m), s = wi*7+1, e = Math.min(s+6, dim); const o = { label: `Wk ${wi+1} (${s}–${e})`, weekIndex: wi, month: m, year: 2026 }; PH_FIELDS.forEach(f => { o[f] = it.reduce((a,x) => a+x[f], 0); }); return o; }); }
+    const phoneWeeklyAll = aggPhoneWeek(phoneAllDays);
+    function aggPhoneMonth(data) { const b = new Map(); data.forEach(x => { const k = `${x.year}-${x.month}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const o = { label: `${MN[it[0].month-1]}`, month: it[0].month, year: 2026 }; PH_FIELDS.forEach(f => { o[f] = it.reduce((a,x) => a+x[f], 0); }); return o; }); }
+    const phoneMonthlyAll = aggPhoneMonth(phoneAllDays);
+
+    /* ════════════════════════════════════════════
+       VOLUMES — EMAIL DATA
+       ════════════════════════════════════════════ */
+    const EM_FIELDS = ["total","appointment","investmentQuestions","followUp","misc"];
+    const emailAllDays = (() => {
+      const r = sRng(98765);
+      const sf = {1:0.92,2:0.95,3:1.02,4:1.05,5:1.08,6:1.03,7:0.90,8:0.88,9:1.00,10:1.05,11:1.07,12:0.95};
+      const raw = [];
+      for (let m = 1; m <= 12; m++) { const dim = daysInMonth(m), s = sf[m] || 1; for (let d = 1; d <= dim; d++) { const dt = new Date(2026, m-1, d), dw = dt.getDay(); if (dw === 0 || dw === 6) continue; raw.push({ month: m, day: d, dw, weight: s * (1 + (r() - 0.5) * 0.3) }); } }
+      const totalW = raw.reduce((a, x) => a + x.weight, 0);
+      return raw.map(x => {
+        const tot = Math.max(1, Math.round((x.weight / totalW) * 10000));
+        const rd = sRng(hash("em-brk-" + x.month + "-" + x.day));
+        const ap = Math.round(tot * (0.50 + (rd() - 0.5) * 0.08)), inv = Math.round(tot * (0.25 + (rd() - 0.5) * 0.06)), fu = Math.round(tot * (0.15 + (rd() - 0.5) * 0.04));
+        return { dayLabel: `${DN[x.dw]} ${x.day}`, month: x.month, year: 2026, dayOfMonth: x.day, weekIndex: Math.floor((x.day - 1) / 7), total: tot, appointment: ap, investmentQuestions: inv, followUp: fu, misc: Math.max(0, tot - ap - inv - fu) };
+      });
+    })();
+    function aggEmailWeek(data) { const b = new Map(); data.forEach(x => { const k = `${x.year}-${x.month}-${x.weekIndex}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const wi = it[0].weekIndex, m = it[0].month, dim = daysInMonth(m), s = wi*7+1, e = Math.min(s+6, dim); const o = { label: `Wk ${wi+1} (${s}–${e})`, weekIndex: wi, month: m, year: 2026 }; EM_FIELDS.forEach(f => { o[f] = it.reduce((a,x) => a+x[f], 0); }); return o; }); }
+    const emailWeeklyAll = aggEmailWeek(emailAllDays);
+    function aggEmailMonth(data) { const b = new Map(); data.forEach(x => { const k = `${x.year}-${x.month}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const o = { label: `${MN[it[0].month-1]}`, month: it[0].month, year: 2026 }; EM_FIELDS.forEach(f => { o[f] = it.reduce((a,x) => a+x[f], 0); }); return o; }); }
+    const emailMonthlyAll = aggEmailMonth(emailAllDays);
+
+    /* ════════════════════════════════════════════
+       VOLUMES — ONLINE ACCESS DATA
+       ════════════════════════════════════════════ */
+    const OL_ALL_FIELDS = ["loginTotal","loginWeb","loginApp","apptTotal","apptFinPlanning","apptInvestChange","apptKycUpdate","apptBankingInfo","apptAcctClosure","apptOther"];
+    const onlineAllDays = (() => {
+      const r = sRng(44444);
+      const sf = {1:0.92,2:0.95,3:1.02,4:1.05,5:1.08,6:1.03,7:0.90,8:0.88,9:1.00,10:1.05,11:1.07,12:0.95};
+      const raw = [];
+      for (let m = 1; m <= 12; m++) { const dim = daysInMonth(m), s = sf[m] || 1; for (let d = 1; d <= dim; d++) { const dt = new Date(2026, m-1, d), dw = dt.getDay(); const weFactor = (dw === 0 || dw === 6) ? 0.65 : 1; raw.push({ month: m, day: d, dw, weight: s * weFactor * (1 + (r() - 0.5) * 0.3) }); } }
+      const totalW = raw.reduce((a, x) => a + x.weight, 0);
+      return raw.map(x => {
+        const rd = sRng(hash("ol-" + x.month + "-" + x.day));
+        const loginTotal = Math.max(1, Math.round((x.weight / totalW) * 100000));
+        const webPct = 0.50 + (rd() - 0.5) * 0.12;
+        const loginWeb = Math.round(loginTotal * webPct), loginApp = loginTotal - loginWeb;
+        const apptTotal = Math.max(1, Math.round((x.weight / totalW) * 15000));
+        const fpP = 0.33 + (rd()-0.5)*0.06, icP = 0.25 + (rd()-0.5)*0.06, otP = 0.25 + (rd()-0.5)*0.06;
+        const rem = Math.max(0, 1 - fpP - icP - otP), kyP = rem*(0.33+(rd()-0.5)*0.1), bkP = rem*(0.33+(rd()-0.5)*0.1);
+        const apptFinPlanning = Math.round(apptTotal*fpP), apptInvestChange = Math.round(apptTotal*icP), apptOther = Math.round(apptTotal*otP);
+        const apptKycUpdate = Math.round(apptTotal*kyP), apptBankingInfo = Math.round(apptTotal*bkP);
+        const apptAcctClosure = Math.max(0, apptTotal - apptFinPlanning - apptInvestChange - apptOther - apptKycUpdate - apptBankingInfo);
+        return { dayLabel: `${DN[x.dw]} ${x.day}`, month: x.month, year: 2026, dayOfMonth: x.day, weekIndex: Math.floor((x.day-1)/7), loginTotal, loginWeb, loginApp, apptTotal, apptFinPlanning, apptInvestChange, apptKycUpdate, apptBankingInfo, apptAcctClosure, apptOther };
+      });
+    })();
+    function aggOnlineWeek(data) { const b = new Map(); data.forEach(x => { const k = `${x.year}-${x.month}-${x.weekIndex}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const wi = it[0].weekIndex, m = it[0].month, dim = daysInMonth(m), s = wi*7+1, e = Math.min(s+6, dim); const o = { label: `Wk ${wi+1} (${s}–${e})`, weekIndex: wi, month: m, year: 2026 }; OL_ALL_FIELDS.forEach(f => { o[f] = it.reduce((a,x) => a+x[f], 0); }); return o; }); }
+    const onlineWeeklyAll = aggOnlineWeek(onlineAllDays);
+    function aggOnlineMonth(data) { const b = new Map(); data.forEach(x => { const k = `${x.year}-${x.month}`; if (!b.has(k)) b.set(k, []); b.get(k).push(x); }); return [...b.entries()].sort(([a],[c]) => a.localeCompare(c)).map(([,it]) => { const o = { label: `${MN[it[0].month-1]}`, month: it[0].month, year: 2026 }; OL_ALL_FIELDS.forEach(f => { o[f] = it.reduce((a,x) => a+x[f], 0); }); return o; }); }
+    const onlineMonthlyAll = aggOnlineMonth(onlineAllDays);
+
+    /* ════════════════════════════════════════════
+       VOLUMES PAGE
+       ════════════════════════════════════════════ */
+    function VolumesPage() {
+      const [subTab, setSubTab] = useState("phone"); const [selMonth, setSelMonth] = useState(3); const [gran, setGran] = useState("monthly"); const [selWeek, setSelWeek] = useState(0);
+      const weeks = useMemo(() => { const n = weeksInMonth(selMonth); return Array.from({length:n}, (_,i) => { const s=i*7+1, e=Math.min(s+6, daysInMonth(selMonth)); return {idx:i, label:`Week ${i+1}`, range:`${MN[selMonth-1]} ${s}–${e}`}; }); }, [selMonth]);
+      const handleMonthChange = m => { setSelMonth(m); setSelWeek(0); };
+      const { phoneData, phoneSummary } = useMemo(() => {
+        if (gran === "monthly") { const sum = phoneMonthlyAll.reduce((a,d) => ({inbound:a.inbound+d.inbound, outbound:a.outbound+d.outbound, total:a.total+d.total}), {inbound:0,outbound:0,total:0}); return { phoneData: phoneMonthlyAll, phoneSummary: sum }; }
+        if (gran === "weekly") { const wks = phoneWeeklyAll.filter(d => d.month === selMonth); const sum = wks.reduce((a,d) => ({inbound:a.inbound+d.inbound, outbound:a.outbound+d.outbound, total:a.total+d.total}), {inbound:0,outbound:0,total:0}); return { phoneData: wks, phoneSummary: sum }; }
+        const days = phoneAllDays.filter(d => d.month === selMonth && d.weekIndex === selWeek);
+        const sum = days.reduce((a,d) => ({inbound:a.inbound+d.inbound, outbound:a.outbound+d.outbound, total:a.total+d.total}), {inbound:0,outbound:0,total:0});
+        return { phoneData: days.map(d => ({...d, label: d.dayLabel})), phoneSummary: sum };
+      }, [gran, selMonth, selWeek]);
+      const { emailData, emailSummary } = useMemo(() => {
+        const sumR = (arr) => { const o = {}; EM_FIELDS.forEach(f => { o[f] = arr.reduce((a,d) => a + (d[f]||0), 0); }); return o; };
+        if (gran === "monthly") return { emailData: emailMonthlyAll, emailSummary: sumR(emailMonthlyAll) };
+        if (gran === "weekly") { const wks = emailWeeklyAll.filter(d => d.month === selMonth); return { emailData: wks, emailSummary: sumR(wks) }; }
+        const days = emailAllDays.filter(d => d.month === selMonth && d.weekIndex === selWeek);
+        return { emailData: days.map(d => ({...d, label: d.dayLabel})), emailSummary: sumR(days) };
+      }, [gran, selMonth, selWeek]);
+      const { onlineData, onlineSummary } = useMemo(() => {
+        const sumR = (arr) => { const o = {}; OL_ALL_FIELDS.forEach(f => { o[f] = arr.reduce((a,d) => a + (d[f]||0), 0); }); return o; };
+        if (gran === "monthly") return { onlineData: onlineMonthlyAll, onlineSummary: sumR(onlineMonthlyAll) };
+        if (gran === "weekly") { const wks = onlineWeeklyAll.filter(d => d.month === selMonth); return { onlineData: wks, onlineSummary: sumR(wks) }; }
+        const days = onlineAllDays.filter(d => d.month === selMonth && d.weekIndex === selWeek);
+        return { onlineData: days.map(d => ({...d, label: d.dayLabel})), onlineSummary: sumR(days) };
+      }, [gran, selMonth, selWeek]);
+      const GranControls = () => (<>
+        <div className="flex flex-wrap gap-3 items-center">
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">{[{k:"daily",l:"Daily"},{k:"weekly",l:"Weekly"},{k:"monthly",l:"Monthly"}].map(t => (<button key={t.k} onClick={() => setGran(t.k)} className={`px-3 py-1.5 rounded-md text-xs ${gran===t.k?"bg-white text-blue-700 shadow-sm font-medium":"text-gray-500"}`}>{t.l}</button>))}</div>
+          {gran !== "monthly" && (<select value={selMonth} onChange={e => handleMonthChange(+e.target.value)} className="px-3 py-1.5 border rounded-md text-xs bg-white">{MONTHS.map(m => <option key={m} value={m}>{MN[m-1]} 2026</option>)}</select>)}
+        </div>
+        {gran === "daily" && (<div className="flex flex-wrap gap-1.5 items-center"><span className="text-xs text-gray-500 mr-1">Week:</span>{weeks.map(w => (<button key={w.idx} onClick={() => setSelWeek(w.idx)} className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${selWeek===w.idx?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-600 border-gray-300 hover:border-blue-400"}`}>{w.label} <span className="text-[10px] opacity-70">({w.range})</span></button>))}</div>)}
+      </>);
+      const granLabel = gran === "monthly" ? "Monthly" : gran === "weekly" ? "Weekly" : "Daily";
+      return (
+        <div className="space-y-5">
+          <h2 className="text-lg font-semibold">Volumes</h2>
+          <div className="flex gap-6 border-b">{["Phone","Email","Online Access"].map(t => (<button key={t} onClick={() => setSubTab(t.toLowerCase().split(" ")[0])} className={`px-1 py-2.5 border-b-2 text-xs ${subTab===t.toLowerCase().split(" ")[0]?"border-blue-600 text-blue-600 font-medium":"border-transparent text-gray-500"}`}>{t}</button>))}</div>
+          {subTab==="phone" && <>
+            <GranControls/>
+            <div className="grid grid-cols-3 gap-3">{[{l:"Total Calls",v:phoneSummary.total,col:"text-gray-900",dot:"bg-gray-400"},{l:"Inbound",v:phoneSummary.inbound,col:"text-blue-600",dot:"bg-blue-500"},{l:"Outbound",v:phoneSummary.outbound,col:"text-amber-600",dot:"bg-amber-500"}].map((c,i) => (<div key={i} className="bg-white rounded-xl border p-4"><div className="flex items-center gap-1.5 mb-1"><span className={`w-2.5 h-2.5 rounded-full ${c.dot}`}/><p className="text-xs text-gray-500 font-medium">{c.l}</p></div><p className={`text-xl font-bold mt-1 ${c.col}`}>{c.v.toLocaleString()}</p></div>))}</div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">{granLabel} Call Volume</h3><div className="h-56"><ResponsiveContainer><BarChart data={phoneData.map(d => ({label: d.label || d.dayLabel, Inbound: d.inbound, Outbound: d.outbound}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Inbound" fill="#3b82f6" stackId="a"/><Bar dataKey="Outbound" fill="#f59e0b" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">Inbound Calls by Reason</h3><div className="h-56"><ResponsiveContainer><BarChart data={phoneData.map(d => ({label: d.label || d.dayLabel, Redemptions: d.ibRedemptions, "Investment Q": d.ibInvestmentQ, "Book Appt": d.ibBookAppt, Miscellaneous: d.ibMisc}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Redemptions" fill="#3b82f6" stackId="a"/><Bar dataKey="Investment Q" fill="#8b5cf6" stackId="a"/><Bar dataKey="Book Appt" fill="#06b6d4" stackId="a"/><Bar dataKey="Miscellaneous" fill="#9ca3af" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">Outbound Calls by Reason</h3><div className="h-56"><ResponsiveContainer><BarChart data={phoneData.map(d => ({label: d.label || d.dayLabel, Insurance: d.obInsurance, Mortgages: d.obMortgages, "Other Products": d.obOtherProducts}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Insurance" fill="#f59e0b" stackId="a"/><Bar dataKey="Mortgages" fill="#ef4444" stackId="a"/><Bar dataKey="Other Products" fill="#10b981" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+            <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b"><th className="text-left px-3 py-2">Period</th><th className="text-right px-3 py-2">Inbound</th><th className="text-right px-3 py-2">Outbound</th><th className="text-right px-3 py-2 font-bold">Total</th></tr></thead><tbody>{phoneData.map((d,i) => (<tr key={i} className={i%2?"bg-gray-50":""}><td className="px-3 py-1.5">{d.label || d.dayLabel}</td><td className="text-right px-3 py-1.5 text-blue-700">{d.inbound.toLocaleString()}</td><td className="text-right px-3 py-1.5 text-amber-700">{d.outbound.toLocaleString()}</td><td className="text-right px-3 py-1.5 font-semibold">{d.total.toLocaleString()}</td></tr>))}</tbody></table></div>
+          </>}
+          {subTab==="email" && <>
+            <GranControls/>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">{[{l:"Total",v:emailSummary.total,col:"text-gray-900",dot:"bg-gray-400"},{l:"Appointment",v:emailSummary.appointment,col:"text-blue-600",dot:"bg-blue-500"},{l:"Investment Q",v:emailSummary.investmentQuestions,col:"text-violet-600",dot:"bg-violet-500"},{l:"Follow-up",v:emailSummary.followUp,col:"text-amber-600",dot:"bg-amber-500"},{l:"Misc",v:emailSummary.misc,col:"text-gray-500",dot:"bg-gray-400"}].map((c,i) => (<div key={i} className="bg-white rounded-xl border p-4"><div className="flex items-center gap-1.5 mb-1"><span className={`w-2.5 h-2.5 rounded-full ${c.dot}`}/><p className="text-xs text-gray-500 font-medium">{c.l}</p></div><p className={`text-xl font-bold mt-1 ${c.col}`}>{(c.v||0).toLocaleString()}</p></div>))}</div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">{granLabel} Email Volume</h3><div className="h-56"><ResponsiveContainer><BarChart data={emailData.map(d => ({label: d.label || d.dayLabel, Appointment: d.appointment, "Investment Q": d.investmentQuestions, "Follow-up": d.followUp, Misc: d.misc}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Appointment" fill="#3b82f6" stackId="a"/><Bar dataKey="Investment Q" fill="#8b5cf6" stackId="a"/><Bar dataKey="Follow-up" fill="#f59e0b" stackId="a"/><Bar dataKey="Misc" fill="#9ca3af" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+            <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b"><th className="text-left px-3 py-2">Period</th><th className="text-right px-3 py-2">Appointment</th><th className="text-right px-3 py-2">Investment Q</th><th className="text-right px-3 py-2">Follow-up</th><th className="text-right px-3 py-2">Misc</th><th className="text-right px-3 py-2 font-bold">Total</th></tr></thead><tbody>{emailData.map((d,i) => (<tr key={i} className={i%2?"bg-gray-50":""}><td className="px-3 py-1.5">{d.label || d.dayLabel}</td><td className="text-right px-3 py-1.5 text-blue-700">{(d.appointment||0).toLocaleString()}</td><td className="text-right px-3 py-1.5 text-purple-700">{(d.investmentQuestions||0).toLocaleString()}</td><td className="text-right px-3 py-1.5 text-amber-700">{(d.followUp||0).toLocaleString()}</td><td className="text-right px-3 py-1.5 text-gray-600">{(d.misc||0).toLocaleString()}</td><td className="text-right px-3 py-1.5 font-semibold">{(d.total||0).toLocaleString()}</td></tr>))}</tbody></table></div>
+          </>}
+          {subTab==="online" && <>
+            <GranControls/>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{[{l:"Total Logins",v:onlineSummary.loginTotal,col:"text-gray-900",dot:"bg-gray-400"},{l:"Web Logins",v:onlineSummary.loginWeb,col:"text-blue-600",dot:"bg-blue-500"},{l:"App Logins",v:onlineSummary.loginApp,col:"text-cyan-600",dot:"bg-cyan-500"},{l:"Appointments Booked",v:onlineSummary.apptTotal,col:"text-purple-600",dot:"bg-indigo-500"}].map((c,i) => (<div key={i} className="bg-white rounded-xl border p-4"><div className="flex items-center gap-1.5 mb-1"><span className={`w-2.5 h-2.5 rounded-full ${c.dot}`}/><p className="text-xs text-gray-500 font-medium">{c.l}</p></div><p className={`text-xl font-bold mt-1 ${c.col}`}>{(c.v||0).toLocaleString()}</p></div>))}</div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">Login Activity</h3><div className="h-56"><ResponsiveContainer><BarChart data={onlineData.map(d => ({label: d.label || d.dayLabel, Web: d.loginWeb, App: d.loginApp}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Web" fill="#3b82f6" stackId="a"/><Bar dataKey="App" fill="#06b6d4" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+            <div className="bg-white rounded-xl border p-5"><h3 className="font-semibold mb-3">Appointments Booked by Reason</h3><div className="h-56"><ResponsiveContainer><BarChart data={onlineData.map(d => ({label: d.label || d.dayLabel, "Fin. Planning": d.apptFinPlanning, "Invest. Change": d.apptInvestChange, "KYC Update": d.apptKycUpdate, "Banking Info": d.apptBankingInfo, "Acct Closure": d.apptAcctClosure, Other: d.apptOther}))} barCategoryGap="20%"><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="label" tick={AX} interval={0}/><YAxis tick={AX}/><Tooltip/><Legend wrapperStyle={LG}/><Bar dataKey="Fin. Planning" fill="#6366f1" stackId="a"/><Bar dataKey="Invest. Change" fill="#3b82f6" stackId="a"/><Bar dataKey="KYC Update" fill="#06b6d4" stackId="a"/><Bar dataKey="Banking Info" fill="#10b981" stackId="a"/><Bar dataKey="Acct Closure" fill="#ef4444" stackId="a"/><Bar dataKey="Other" fill="#9ca3af" stackId="a" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div></div>
+          </>}
+        </div>
+      );
+    }
+
+    /* ════════════════════════════════════════════
+       MAIN DASHBOARD
+       ════════════════════════════════════════════ */
+    function Dashboard() {
+      const [topTab, setTopTab] = useState("call-performance"); const [subTab, setSubTab] = useState("overview"); const [tp, setTp] = useState("month"); const [selMonth, setSelMonth] = useState(3); const [selWeek, setSelWeek] = useState(0); const [selDay, setSelDay] = useState(1); const [metricCat, setMetricCat] = useState("operational"); const [selectedAdvisor, setSelectedAdvisor] = useState(null); const [showDefs, setShowDefs] = useState(false);
+      const weeks = useMemo(() => Array.from({length: weeksInMonth(selMonth)}, (_, i) => { const s=i*7+1, e=Math.min(s+6, daysInMonth(selMonth)); return {idx:i, label:`Week ${i+1}`, range:`${MN[selMonth-1]} ${s}–${e}`}; }), [selMonth]);
+      const days = useMemo(() => daysInWeek(selMonth, selWeek), [selMonth, selWeek]);
+      const handleMonthChange = m => { setSelMonth(m); setSelWeek(0); const d = daysInWeek(m, 0); setSelDay(d[0]?.day || 1); };
+      const handlePeriodChange = p => { setTp(p); setSelDay(days[0]?.day || 1); };
+      const handleWeekChange = w => { setSelWeek(w); const d = daysInWeek(selMonth, w); setSelDay(d[0]?.day || 1); };
+      const advisors = useMemo(() => getAdvisors(selMonth, tp, selWeek, selDay), [selMonth, tp, selWeek, selDay]);
+      const topTabs = [{key:"call-performance",label:"Advisor Call Performance",icon:Phone},{key:"flows",label:"Flows",icon:ArrowRightLeft},{key:"volumes",label:"Volumes",icon:BarChart3},{key:"nps",label:"NPS",icon:ThumbsUp}];
+      const timePeriods = [{k:"day",l:"Day"},{k:"week",l:"Week"},{k:"month",l:"Month"},{k:"all-time",l:"All Time"}];
+      const metricCats = [{k:"operational",l:"Operational"},{k:"quality",l:"Quality"},{k:"experience",l:"Experience"},{k:"opportunities",l:"Opportunities"},{k:"callTimeBreakdown",l:"Call Breakdown"}];
+      return (
+        <div className="min-h-screen bg-gray-50 text-sm">
+          <header className="bg-white border-b sticky top-0 z-20">
+            <div className="px-4 md:px-6 py-3"><div className="flex items-center justify-between"><div><h1 className="text-xl font-bold text-blue-900">Performance Dashboard</h1><p className="text-xs text-gray-500">Advisor Performance Management</p></div><div className="text-right"><p className="text-xs text-gray-500">Manager Dashboard</p><p className="text-[10px] text-gray-400">Last updated: March 4, 2026</p></div></div></div>
+            <div className="px-4 md:px-6 flex gap-1 overflow-x-auto">{topTabs.map(t => (<button key={t.key} onClick={() => {setTopTab(t.key); setSubTab("overview"); setSelectedAdvisor(null);}} className={`flex items-center gap-1.5 px-4 py-2 text-xs rounded-t-lg whitespace-nowrap ${topTab===t.key?"bg-gray-50 text-blue-700 border border-gray-200 border-b-gray-50 -mb-px font-medium":"text-gray-500 hover:text-gray-700 hover:bg-gray-100"}`}><t.icon className="w-3.5 h-3.5"/>{t.label}</button>))}</div>
+          </header>
+          {topTab === "call-performance" && <>
+            <nav className="bg-white border-b"><div className="px-4 md:px-6 flex gap-6">{[{k:"overview",l:"Overview",i:BarChart3},{k:"compare",l:"Compare",i:GitCompare}].map(t => (<button key={t.k} onClick={() => {setSubTab(t.k); setSelectedAdvisor(null);}} className={`flex items-center gap-1.5 px-1 py-2.5 border-b-2 text-xs ${subTab===t.k?"border-blue-600 text-blue-600 font-medium":"border-transparent text-gray-500"}`}><t.i className="w-3.5 h-3.5"/>{t.l}</button>))}</div></nav>
+            <main className="px-4 md:px-6 py-5 space-y-5">
+              {subTab === "compare" ? <ComparePage advisors={advisors} tp={tp}/> : selectedAdvisor ? <CallLog advisor={selectedAdvisor} month={selMonth} dayOfMonth={selDay} onBack={() => setSelectedAdvisor(null)}/> : <>
+                <div className="flex flex-wrap gap-3 items-center"><div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">{timePeriods.map(t => (<button key={t.k} onClick={() => handlePeriodChange(t.k)} className={`px-3 py-1.5 rounded-md text-xs ${tp===t.k?"bg-white text-blue-700 shadow-sm font-medium":"text-gray-500"}`}>{t.l}</button>))}</div>{tp !== "all-time" && <select value={selMonth} onChange={e => handleMonthChange(+e.target.value)} className="px-3 py-1.5 border rounded-md text-xs bg-white">{MONTHS.map(m => <option key={m} value={m}>{MN[m-1]} 2026</option>)}</select>}<button onClick={() => setShowDefs(true)} className="flex items-center gap-1 px-3 py-1.5 border rounded-md text-xs text-gray-600 hover:bg-gray-50 ml-auto"><Info className="w-3.5 h-3.5"/>Definitions</button></div>
+                {(tp === "week" || tp === "day") && (<div className="flex flex-wrap gap-1.5 items-center"><span className="text-xs text-gray-500 mr-1">Week:</span>{weeks.map(w => (<button key={w.idx} onClick={() => handleWeekChange(w.idx)} className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${selWeek===w.idx?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-600 border-gray-300 hover:border-blue-400"}`}>{w.label} <span className="text-[10px] opacity-70">({w.range})</span></button>))}</div>)}
+                {tp === "day" && (<div className="flex flex-wrap gap-1.5 items-center"><span className="text-xs text-gray-500 mr-1">Day:</span>{days.map(d => (<button key={d.day} onClick={() => setSelDay(d.day)} className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${selDay===d.day?"bg-indigo-600 text-white border-indigo-600":"bg-white text-gray-600 border-gray-300 hover:border-indigo-400"}`}>{d.label}</button>))}</div>)}
+                <div className="flex gap-2 flex-wrap">{metricCats.map(c => (<button key={c.k} onClick={() => setMetricCat(c.k)} className={`px-3 py-1.5 rounded-full text-xs border ${metricCat===c.k?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-600 border-gray-300"}`}>{c.l}</button>))}</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">{advisors.map(a => (<AdvisorCard key={a.id} advisor={a} tp={tp} metricCat={metricCat} onClick={tp==="day" ? () => setSelectedAdvisor(a) : undefined}/>))}</div>
+              </>}
+            </main>
+          </>}
+          {topTab === "flows" && <main className="px-4 md:px-6 py-5"><FlowsPage/></main>}
+          {topTab === "volumes" && <main className="px-4 md:px-6 py-5"><VolumesPage/></main>}
+          {topTab === "nps" && <main className="px-4 md:px-6 py-5"><NpsPage/></main>}
+          <footer className="px-6 py-3 border-t bg-white"><p className="text-[10px] text-gray-400 text-center"><strong>DISCLAIMER:</strong> This dashboard is for demonstration purposes. All data is mock data.</p></footer>
+          {showDefs && <MetricDefinitionsModal onClose={() => setShowDefs(false)}/>}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<Dashboard/>);
+  </script>
+</body>
+</html>
